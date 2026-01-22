@@ -14,6 +14,9 @@ HTTP/Refit client library for accessing the Configuration API. This NuGet packag
   - [Environment Variables (Alternative)](#environment-variables-alternative)
 - [Service Registration](#service-registration)
 - [Available Services](#available-services)
+- [Return Types](#return-types)
+  - [ApiResponse\<T\>](#apiresponset)
+  - [Handling API Responses](#handling-api-responses)
 - [Usage](#usage)
   - [Dependency Injection](#dependency-injection)
 - [IConfigurationService](#iconfigurationservice)
@@ -37,10 +40,10 @@ HTTP/Refit client library for accessing the Configuration API. This NuGet packag
 - [Entity Models](#entity-models)
   - [Application](#application)
   - [Configuration](#configuration-1)
-- [Distributed Caching](#distributed-caching)
-  - [Default Behavior](#default-behavior)
-  - [Cache Behavior Summary](#cache-behavior-summary)
-  - [Load-Balanced Environments](#load-balanced-environments)
+- [Caching](#caching)
+- [HybridCache](#hybridcache)
+- [Cache Behavior Summary](#cache-behavior-summary)
+- [Load-Balanced Environments](#load-balanced-environments)
 - [Logging](#logging)
 - [Error Handling](#error-handling)
   - [Refit API Exceptions](#refit-api-exceptions)
@@ -85,8 +88,9 @@ Install-Package Corp.Api.Configuration.Lib
 - Valid client certificate (.pfx) for API authentication
 - AES-encrypted certificate password using `Corp.Lib.Cryptography.Aes`
 - Required NuGet packages (installed automatically):
-  - `Corp.Lib.Cryptography` (v10.0.0)
+  - `Corp.Lib.Cryptography` (v10.0.1)
   - `Corp.Lib.Refit` (v10.0.2)
+  - `Microsoft.Extensions.Caching.Hybrid` (v9.4.0)
 
 ## Configuration
 
@@ -153,16 +157,16 @@ using Corp.Api.Configuration.Lib.Extensions;
 var builder = WebApplication.CreateBuilder(args);
 
 // Add Configuration API services
-builder.AddConfigurationApi();
+builder.AddConfigurationApiAndLoadConfigurations("MyApplicationName");
 
 var app = builder.Build();
 ```
 
-The `AddConfigurationApi()` extension method:
+The `AddConfigurationApiAndLoadConfigurations()` extension method:
 - Reads configuration from appsettings.json
 - Registers Refit HTTP clients with certificate-based authentication
-- Configures an in-memory distributed cache (suitable for single-server deployments)
-- Registers the `IDistributedCacheAccessor` for internal caching operations
+- Configures `HybridCache` with an in-memory distributed cache (L1 + L2 caching)
+- Loads configuration key-value pairs from the API into the application's `IConfiguration`
 
 ## Available Services
 
@@ -173,6 +177,77 @@ The library provides three main services:
 | `IConfigurationService` | CRUD operations for configuration key-value pairs with caching support |
 | `IApplicationService` | CRUD operations for application management |
 | `IHeartbeatService` | Health check and diagnostic operations |
+
+## Return Types
+
+All service methods return `Refit.ApiResponse<T>`, which provides access to both the response content and HTTP response metadata.
+
+### ApiResponse\<T\>
+
+The `ApiResponse<T>` type wraps the API response and provides:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Content` | `T` | The deserialized response body |
+| `StatusCode` | `HttpStatusCode` | The HTTP status code (e.g., 200, 404, 500) |
+| `IsSuccessStatusCode` | `bool` | `true` if status code is 2xx |
+| `Headers` | `HttpResponseHeaders` | Response headers |
+| `Error` | `ApiException?` | Exception details if the request failed |
+| `ReasonPhrase` | `string?` | HTTP reason phrase |
+
+### Handling API Responses
+
+```csharp
+using Refit;
+
+// Get all applications with full response details
+ApiResponse<List<Application>?> response = await _applicationService.GetAllAsync();
+
+if (response.IsSuccessStatusCode)
+{
+    List<Application>? applications = response.Content;
+    Console.WriteLine($"Retrieved {applications?.Count ?? 0} applications");
+}
+else
+{
+    Console.WriteLine($"API returned {response.StatusCode}: {response.ReasonPhrase}");
+    
+    if (response.Error != null)
+    {
+        Console.WriteLine($"Error details: {response.Error.Content}");
+    }
+}
+```
+
+**Accessing just the content:**
+
+```csharp
+// If you only need the content and want to handle errors via exceptions
+var response = await _applicationService.GetByIdAsync(1);
+Application? app = response.Content;
+```
+
+**Checking specific status codes:**
+
+```csharp
+var response = await _applicationService.GetByIdAsync(id);
+
+switch (response.StatusCode)
+{
+    case HttpStatusCode.OK:
+        Console.WriteLine($"Found: {response.Content?.Name}");
+        break;
+    case HttpStatusCode.NotFound:
+        Console.WriteLine("Application not found");
+        break;
+    case HttpStatusCode.Unauthorized:
+        Console.WriteLine("Authentication failed - check certificate");
+        break;
+    default:
+        Console.WriteLine($"Unexpected status: {response.StatusCode}");
+        break;
+}
+```
 
 ## Usage
 
@@ -213,47 +288,57 @@ Provides CRUD operations for managing configuration settings. Configuration sett
 Retrieves all configuration settings from the API.
 
 ```csharp
-List<Configuration>? configurations = await _configurationService.GetAllAsync();
+var response = await _configurationService.GetAllAsync();
 
-if (configurations != null)
+if (response.IsSuccessStatusCode && response.Content != null)
 {
-    foreach (var config in configurations)
+    foreach (var config in response.Content)
     {
         Console.WriteLine($"[{config.ApplicationId}] {config.Key}: {config.Value}");
     }
 }
+else
+{
+    Console.WriteLine($"Failed to retrieve configurations: {response.StatusCode}");
+}
 ```
 
 **API Endpoint:** `GET /Configuration/GetAll`
+
+**Returns:** `ApiResponse<List<Configuration>?>`
 
 ### Get Configuration by ID
 
 Retrieves a specific configuration setting by its unique identifier.
 
 ```csharp
-Configuration? configuration = await _configurationService.GetByIdAsync(1);
+var response = await _configurationService.GetByIdAsync(1);
 
-if (configuration != null)
+if (response.IsSuccessStatusCode && response.Content != null)
 {
-    Console.WriteLine($"Found: {configuration.Key} = {configuration.Value}");
+    Console.WriteLine($"Found: {response.Content.Key} = {response.Content.Value}");
 }
 else
 {
-    Console.WriteLine("Configuration not found");
+    Console.WriteLine($"Configuration not found (Status: {response.StatusCode})");
 }
 ```
 
 **API Endpoint:** `GET /Configuration/GetById/{id}`
 
+**Returns:** `ApiResponse<Configuration?>`
+
 ### Get Configurations by Application Name (Cached)
 
-Retrieves all configuration settings for a specific application. Results are **cached for 30 days** in the distributed cache.
+Retrieves all configuration settings for a specific application. Results are **cached for 90 days** using `HybridCache` (L1 in-memory + L2 distributed).
+
+> **Note:** This method returns `List<Configuration>?` directly (not wrapped in `ApiResponse`) because the cached content is returned, not the HTTP response metadata.
 
 ```csharp
 // First call: fetches from API and caches the result
 List<Configuration>? configs = await _configurationService.GetByApplicationNameAsync("MyApp");
 
-// Subsequent calls within 30 days: returns cached data (no API call)
+// Subsequent calls within 90 days: returns cached data (no API call)
 List<Configuration>? cachedConfigs = await _configurationService.GetByApplicationNameAsync("MyApp");
 
 if (configs != null)
@@ -267,11 +352,15 @@ if (configs != null)
 
 **API Endpoint:** `GET /Configuration/GetByApplicationName/{applicationName}`
 
+**Returns:** `List<Configuration>?` (cached content)
+
 **Cache Key Format:** `Corp.Api.Configuration.Lib.Configurations.{applicationName}`
 
 ### Reset Cached Configuration
 
 Invalidates the cache for the specified application and reloads fresh data from the API. Use this method after updating configurations to ensure consumers get the latest values.
+
+> **Note:** This method returns `List<Configuration>?` directly (not wrapped in `ApiResponse`) because the cached content is returned.
 
 ```csharp
 // After updating configurations, reset the cache to reload fresh data
@@ -279,6 +368,8 @@ List<Configuration>? freshConfigs = await _configurationService.ResetCachedConfi
 
 Console.WriteLine($"Reloaded {freshConfigs?.Count ?? 0} configurations");
 ```
+
+**Returns:** `List<Configuration>?` (fresh cached content)
 
 ### Insert Configuration
 
@@ -293,11 +384,21 @@ var newConfig = new Configuration
     CreatedBy = "admin@example.com"
 };
 
-int newId = await _configurationService.InsertAsync(newConfig);
-Console.WriteLine($"Created configuration with ID: {newId}");
+var response = await _configurationService.InsertAsync(newConfig);
+
+if (response.IsSuccessStatusCode)
+{
+    Console.WriteLine($"Created configuration with ID: {response.Content}");
+}
+else
+{
+    Console.WriteLine($"Failed to create: {response.StatusCode}");
+}
 ```
 
 **API Endpoint:** `POST /Configuration/Insert`
+
+**Returns:** `ApiResponse<int>` (the new configuration ID)
 
 **Required Fields:**
 - `ApplicationId` - Foreign key to the Application table
@@ -310,16 +411,17 @@ Console.WriteLine($"Created configuration with ID: {newId}");
 Updates an existing configuration setting. Returns the number of rows affected.
 
 ```csharp
-Configuration? config = await _configurationService.GetByIdAsync(1);
+var getResponse = await _configurationService.GetByIdAsync(1);
 
-if (config != null)
+if (getResponse.IsSuccessStatusCode && getResponse.Content != null)
 {
+    var config = getResponse.Content;
     config.Value = "updated-value";
     config.ModifiedBy = "admin@example.com";
     
-    int rowsAffected = await _configurationService.UpdateAsync(config);
+    var updateResponse = await _configurationService.UpdateAsync(config);
     
-    if (rowsAffected > 0)
+    if (updateResponse.IsSuccessStatusCode && updateResponse.Content > 0)
     {
         Console.WriteLine("Configuration updated successfully");
         
@@ -330,6 +432,8 @@ if (config != null)
 ```
 
 **API Endpoint:** `PUT /Configuration/Update`
+
+**Returns:** `ApiResponse<int>` (rows affected)
 
 **Required Fields for Update:**
 - `Id` - The configuration ID
@@ -343,19 +447,21 @@ if (config != null)
 Deletes a configuration setting by its ID. Returns the number of rows affected.
 
 ```csharp
-int rowsAffected = await _configurationService.DeleteAsync(configId);
+var response = await _configurationService.DeleteAsync(configId);
 
-if (rowsAffected > 0)
+if (response.IsSuccessStatusCode && response.Content > 0)
 {
     Console.WriteLine("Configuration deleted successfully");
 }
 else
 {
-    Console.WriteLine("Configuration not found or already deleted");
+    Console.WriteLine($"Configuration not found or already deleted (Status: {response.StatusCode})");
 }
 ```
 
 **API Endpoint:** `DELETE /Configuration/Delete/{id}`
+
+**Returns:** `ApiResponse<int>` (rows affected)
 
 ---
 
@@ -368,11 +474,11 @@ Provides CRUD operations for managing applications. Applications serve as contai
 Retrieves all applications from the API.
 
 ```csharp
-List<Application>? applications = await _applicationService.GetAllAsync();
+var response = await _applicationService.GetAllAsync();
 
-if (applications != null)
+if (response.IsSuccessStatusCode && response.Content != null)
 {
-    foreach (var app in applications)
+    foreach (var app in response.Content)
     {
         Console.WriteLine($"[{app.Id}] {app.Name}: {app.Description}");
     }
@@ -381,30 +487,35 @@ if (applications != null)
 
 **API Endpoint:** `GET /Application/GetAll`
 
+**Returns:** `ApiResponse<List<Application>?>`
+
 ### Get Application by ID
 
 Retrieves a specific application by its unique identifier.
 
 ```csharp
-Application? app = await _applicationService.GetByIdAsync(1);
+var response = await _applicationService.GetByIdAsync(1);
 
-if (app != null)
+if (response.IsSuccessStatusCode && response.Content != null)
 {
-    Console.WriteLine($"Found: {app.Name} - {app.Description}");
+    Console.WriteLine($"Found: {response.Content.Name} - {response.Content.Description}");
 }
 ```
 
 **API Endpoint:** `GET /Application/GetById/{id}`
+
+**Returns:** `ApiResponse<Application?>`
 
 ### Get Application by Name
 
 Retrieves a specific application by its name.
 
 ```csharp
-Application? app = await _applicationService.GetByNameAsync("MyApp");
+var response = await _applicationService.GetByNameAsync("MyApp");
 
-if (app != null)
+if (response.IsSuccessStatusCode && response.Content != null)
 {
+    var app = response.Content;
     Console.WriteLine($"Application ID: {app.Id}");
     Console.WriteLine($"Description: {app.Description}");
     Console.WriteLine($"Created: {app.CreatedOn} by {app.CreatedBy}");
@@ -412,6 +523,8 @@ if (app != null)
 ```
 
 **API Endpoint:** `GET /Application/GetByName/{name}`
+
+**Returns:** `ApiResponse<Application?>`
 
 ### Insert Application
 
@@ -425,11 +538,17 @@ var newApp = new Application
     CreatedBy = "admin@example.com"
 };
 
-int newId = await _applicationService.InsertAsync(newApp);
-Console.WriteLine($"Created application with ID: {newId}");
+var response = await _applicationService.InsertAsync(newApp);
+
+if (response.IsSuccessStatusCode)
+{
+    Console.WriteLine($"Created application with ID: {response.Content}");
+}
 ```
 
 **API Endpoint:** `POST /Application/Insert`
+
+**Returns:** `ApiResponse<int>` (the new application ID)
 
 **Required Fields:**
 - `Name` - Application name (max 100 characters, unique)
@@ -443,16 +562,17 @@ Console.WriteLine($"Created application with ID: {newId}");
 Updates an existing application. Returns the number of rows affected.
 
 ```csharp
-Application? app = await _applicationService.GetByIdAsync(1);
+var getResponse = await _applicationService.GetByIdAsync(1);
 
-if (app != null)
+if (getResponse.IsSuccessStatusCode && getResponse.Content != null)
 {
+    var app = getResponse.Content;
     app.Description = "Updated description for the application";
     app.ModifiedBy = "admin@example.com";
     
-    int rowsAffected = await _applicationService.UpdateAsync(app);
+    var updateResponse = await _applicationService.UpdateAsync(app);
     
-    if (rowsAffected > 0)
+    if (updateResponse.IsSuccessStatusCode && updateResponse.Content > 0)
     {
         Console.WriteLine("Application updated successfully");
     }
@@ -460,6 +580,8 @@ if (app != null)
 ```
 
 **API Endpoint:** `PUT /Application/Update`
+
+**Returns:** `ApiResponse<int>` (rows affected)
 
 **Required Fields for Update:**
 - `Id` - The application ID
@@ -472,15 +594,17 @@ Deletes an application by its ID. Returns the number of rows affected.
 > **Warning:** Deleting an application may affect associated configuration settings. Ensure all related configurations are handled before deletion.
 
 ```csharp
-int rowsAffected = await _applicationService.DeleteAsync(appId);
+var response = await _applicationService.DeleteAsync(appId);
 
-if (rowsAffected > 0)
+if (response.IsSuccessStatusCode && response.Content > 0)
 {
     Console.WriteLine("Application deleted successfully");
 }
 ```
 
 **API Endpoint:** `DELETE /Application/Delete/{id}`
+
+**Returns:** `ApiResponse<int>` (rows affected)
 
 ---
 
@@ -493,13 +617,24 @@ Provides health check and diagnostic operations for the Configuration API.
 Returns the current server timestamp from the Configuration API. Use this to verify API connectivity.
 
 ```csharp
-DateTime serverTime = await _heartbeatService.GetHeartbeatAsync();
-Console.WriteLine($"API Server Time: {serverTime}");
-Console.WriteLine($"Local Time: {DateTime.Now}");
-Console.WriteLine($"Time Difference: {DateTime.Now - serverTime}");
+var response = await _heartbeatService.GetHeartbeatAsync();
+
+if (response.IsSuccessStatusCode)
+{
+    DateTime serverTime = response.Content;
+    Console.WriteLine($"API Server Time: {serverTime}");
+    Console.WriteLine($"Local Time: {DateTime.Now}");
+    Console.WriteLine($"Time Difference: {DateTime.Now - serverTime}");
+}
+else
+{
+    Console.WriteLine($"Heartbeat failed: {response.StatusCode}");
+}
 ```
 
 **API Endpoint:** `GET /Heartbeat/Get`
+
+**Returns:** `ApiResponse<DateTime>`
 
 ### Get Repository Connection String Name
 
@@ -549,29 +684,38 @@ public class Configuration
 
 ---
 
-## Distributed Caching
+## Caching
 
-### Default Behavior
+### HybridCache
 
-By default, this library uses **in-memory distributed cache**, which is suitable for single-server deployments. The cache is configured automatically when calling `AddConfigurationApi()`.
+This library uses `Microsoft.Extensions.Caching.Hybrid.HybridCache` for caching, which provides:
+
+- **Two-tier caching (L1 + L2):** Fast in-memory cache (L1) backed by a distributed cache (L2)
+- **Stampede protection:** Prevents multiple concurrent requests from all hitting the API when the cache expires
+- **Automatic serialization:** No manual JSON serialization/deserialization required
+- **Simplified API:** Uses `GetOrCreateAsync` pattern for cleaner code
+
+By default, the library configures an in-memory distributed cache as L2, which is suitable for single-server deployments.
 
 ### Cache Behavior Summary
 
-| Method | Cached | Cache Duration | Notes |
-|--------|--------|----------------|-------|
-| `GetAllAsync()` | No | - | Always fetches fresh data |
-| `GetByIdAsync(int)` | No | - | Always fetches fresh data |
-| `GetByApplicationNameAsync(string)` | **Yes** | 30 days | Primary caching method |
-| `ResetCachedConfigurationAsync(string)` | Invalidates & reloads | 30 days | Use after updates |
-| `InsertAsync()` | No | - | Does not invalidate cache |
-| `UpdateAsync()` | No | - | Does not invalidate cache |
-| `DeleteAsync(int)` | No | - | Does not invalidate cache |
+| Method | Cached | Cache Duration | Returns |
+|--------|--------|----------------|--------|
+| `GetAllAsync()` | No | - | `ApiResponse<List<Configuration>?>` |
+| `GetByIdAsync(int)` | No | - | `ApiResponse<Configuration?>` |
+| `GetByApplicationNameAsync(string)` | **Yes** | 90 days | `List<Configuration>?` |
+| `ResetCachedConfigurationAsync(string)` | Invalidates & reloads | 90 days | `List<Configuration>?` |
+| `InsertAsync()` | No | - | `ApiResponse<int>` |
+| `UpdateAsync()` | No | - | `ApiResponse<int>` |
+| `DeleteAsync(int)` | No | - | `ApiResponse<int>` |
+
+> **Note:** Cached methods return the content directly (`List<Configuration>?`) rather than `ApiResponse<T>` because the cache stores the deserialized content, not the HTTP response metadata.
 
 > **Important:** After calling `InsertAsync()`, `UpdateAsync()`, or `DeleteAsync()`, you should call `ResetCachedConfigurationAsync()` to ensure cached data is refreshed.
 
 ### Load-Balanced Environments
 
-For load-balanced or multi-server environments, configure a distributed cache **before** calling `AddConfigurationApi()` to ensure cache consistency across all servers.
+For load-balanced or multi-server environments, configure a distributed cache (L2) **before** calling `AddConfigurationApiAndLoadConfigurations()` to ensure cache consistency across all servers. `HybridCache` will automatically use it as the secondary cache.
 
 #### Redis (Recommended)
 
@@ -584,15 +728,16 @@ using Corp.Api.Configuration.Lib.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Configure Redis BEFORE AddConfigurationApi()
+// Configure Redis BEFORE AddConfigurationApiAndLoadConfigurations()
+// HybridCache will use this as L2 cache
 builder.Services.AddStackExchangeRedisCache(options =>
 {
     options.Configuration = "localhost:6379";
     options.InstanceName = "ConfigApi_";
 });
 
-// This will use the Redis cache instead of in-memory
-builder.AddConfigurationApi();
+// HybridCache will use Redis as L2, with in-memory as L1
+builder.AddConfigurationApiAndLoadConfigurations("MyApplicationName");
 
 var app = builder.Build();
 ```
@@ -608,7 +753,7 @@ using Corp.Api.Configuration.Lib.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Configure SQL Server cache BEFORE AddConfigurationApi()
+// Configure SQL Server cache BEFORE AddConfigurationApiAndLoadConfigurations()
 builder.Services.AddDistributedSqlServerCache(options =>
 {
     options.ConnectionString = builder.Configuration.GetConnectionString("CacheDb");
@@ -616,8 +761,8 @@ builder.Services.AddDistributedSqlServerCache(options =>
     options.TableName = "ConfigurationCache";
 });
 
-// This will use the SQL Server cache instead of in-memory
-builder.AddConfigurationApi();
+// HybridCache will use SQL Server as L2, with in-memory as L1
+builder.AddConfigurationApiAndLoadConfigurations("MyApplicationName");
 
 var app = builder.Build();
 ```
@@ -704,13 +849,13 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Optional: Configure Redis for load-balanced environments
 // builder.Services.AddStackExchangeRedisCache(options =>
-/// {
+// {
 //     options.Configuration = "localhost:6379";
 //     options.InstanceName = "ConfigApi_";
 // });
 
-// Register Configuration API services
-builder.AddConfigurationApi();
+// Register Configuration API services and load configurations
+builder.AddConfigurationApiAndLoadConfigurations("MyApplicationName");
 
 var app = builder.Build();
 
@@ -720,46 +865,39 @@ app.MapGet("/config/{appName}", async (
     IConfigurationService configService,
     IApplicationService appService) =>
 {
-    try
+    // Verify application exists
+    var appResponse = await appService.GetByNameAsync(appName);
+    
+    if (!appResponse.IsSuccessStatusCode || appResponse.Content == null)
     {
-        // Verify application exists
-        var application = await appService.GetByNameAsync(appName);
-        if (application == null)
-        {
-            return Results.NotFound($"Application '{appName}' not found");
-        }
+        return Results.NotFound($"Application '{appName}' not found");
+    }
 
-        // Get cached configurations
-        var configs = await configService.GetByApplicationNameAsync(appName);
-        
-        return Results.Ok(new
-        {
-            Application = application,
-            Configurations = configs,
-            Count = configs?.Count ?? 0
-        });
-    }
-    catch (ApiException ex)
+    // Get cached configurations
+    var configs = await configService.GetByApplicationNameAsync(appName);
+    
+    return Results.Ok(new
     {
-        return Results.Problem(
-            title: "Configuration API Error",
-            detail: ex.Message,
-            statusCode: (int)ex.StatusCode);
-    }
+        Application = appResponse.Content,
+        Configurations = configs,
+        Count = configs?.Count ?? 0
+    });
 });
 
 // Health check endpoint
 app.MapGet("/health", async (IHeartbeatService heartbeat) =>
 {
-    try
+    var response = await heartbeat.GetHeartbeatAsync();
+    
+    if (response.IsSuccessStatusCode)
     {
-        var serverTime = await heartbeat.GetHeartbeatAsync();
-        return Results.Ok(new { Status = "Healthy", ServerTime = serverTime });
+        return Results.Ok(new { Status = "Healthy", ServerTime = response.Content });
     }
-    catch
-    {
-        return Results.Problem(title: "Unhealthy", statusCode: 503);
-    }
+    
+    return Results.Problem(
+        title: "Unhealthy", 
+        detail: $"API returned {response.StatusCode}",
+        statusCode: 503);
 });
 
 app.Run();
@@ -857,10 +995,16 @@ await _configurationService.ResetCachedConfigurationAsync("MyApp");
 
 | Version | Changes |
 |---------|---------|
-| 10.0.0-beta-2 | Current version targeting .NET 10 |
+| 10.0.3 | Updated all service methods to return `ApiResponse<T>` for access to HTTP response metadata. Migrated from `IDistributedCache` to `HybridCache` for improved caching with stampede protection. Cache duration increased to 90 days. |
+| 10.0.0-beta-2 | Initial version targeting .NET 10 |
 
 ---
 
 ## License
 
 Copyright © Sedgwick Consumer Claims. All rights reserved.
+
+## See Also
+
+- [Corp.Api.Configuration.Lib.DbDirect](../Corp.Api.Configuration.Lib.DbDirect/README.md) - For direct database access
+- [Corp.Api.Configuration.Obj](../Corp.Api.Configuration.Obj/README.md) - Entity models and DTOs
