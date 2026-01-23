@@ -37,6 +37,15 @@ HTTP/Refit client library for accessing the Configuration API. This NuGet packag
 - [IHeartbeatService](#iheartbeatservice)
   - [Get Heartbeat](#get-heartbeat)
   - [Get Repository Connection String Name](#get-repository-connection-string-name)
+- [IConfigurationAccessor (Recommended)](#iconfigurationaccessor-recommended)
+  - [Why Use IConfigurationAccessor](#why-use-iconfigurationaccessor)
+  - [Get a String Value](#get-a-string-value)
+  - [Get a String Value with Default](#get-a-string-value-with-default)
+  - [Get a Typed Value](#get-a-typed-value)
+  - [Get a Typed Value with Default](#get-a-typed-value-with-default)
+  - [Get All Configurations](#get-all-configurations-1)
+  - [Refresh Cache](#refresh-cache)
+  - [Check if Key Exists](#check-if-key-exists)
 - [Entity Models](#entity-models)
   - [Application](#application)
   - [Configuration](#configuration-1)
@@ -65,9 +74,9 @@ HTTP/Refit client library for accessing the Configuration API. This NuGet packag
 
 ## Overview
 
-This library is designed for **web applications that cannot access the database directly** and must communicate with the Configuration API via HTTP. It uses [Refit](https://github.com/reactiveui/refit) for type-safe HTTP client generation and includes built-in distributed caching for improved performance.
+This library is designed for **web applications that need to access centralized configuration settings** via HTTP. It uses [Refit](https://github.com/reactiveui/refit) for type-safe HTTP client generation and includes built-in caching using `HybridCache` for optimal performance with stampede protection.
 
-> **Note:** If your application has direct database access (e.g., another API in the same network), use `Corp.Api.Configuration.Lib.DbDirect` instead for better performance.
+> **Architecture Note:** In our infrastructure, web applications do not have direct database access. All configuration data must be accessed through the Configuration API using this library.
 
 ## Installation
 
@@ -170,10 +179,11 @@ The `AddConfigurationApiAndLoadConfigurations()` extension method:
 
 ## Available Services
 
-The library provides three main services:
+The library provides four main services:
 
 | Service | Description |
 |---------|-------------|
+| `IConfigurationAccessor` | **Recommended** - Cached access to configuration values throughout the application lifecycle |
 | `IConfigurationService` | CRUD operations for configuration key-value pairs with caching support |
 | `IApplicationService` | CRUD operations for application management |
 | `IHeartbeatService` | Health check and diagnostic operations |
@@ -649,6 +659,339 @@ Console.WriteLine($"API is using connection string: {connectionStringName}");
 
 ---
 
+## IConfigurationAccessor (Recommended)
+
+`IConfigurationAccessor` provides **cached access to configuration values throughout the application lifecycle**. This is the **recommended way** to access configuration values as it leverages `HybridCache` for optimal performance with stampede protection.
+
+### Why Use IConfigurationAccessor
+
+When you call `AddConfigurationApiAndLoadConfigurations()`, configurations are loaded into `IConfiguration` at startup. However, this creates a **static copy** that:
+- Never updates until the application restarts
+- Doesn't benefit from HybridCache after the initial load
+- Cannot reflect configuration changes made during runtime
+
+`IConfigurationAccessor` solves these problems:
+
+| Feature | `IConfiguration` (Startup Load) | `IConfigurationAccessor` |
+|---------|--------------------------------|--------------------------|
+| Cache used | Only at startup | Every access |
+| Runtime updates | ❌ Requires restart | ✅ Call `RefreshAsync()` |
+| Stampede protection | ❌ Only startup | ✅ Throughout lifecycle |
+| Type conversion | Manual parsing | Built-in with `IParsable<T>` |
+| Async/await | ❌ Synchronous only | ✅ Fully async |
+
+### Dependency Injection
+
+Inject `IConfigurationAccessor` into your classes:
+
+```csharp
+using Corp.Api.Configuration.Lib.Services.Interfaces;
+
+public class MyService
+{
+    private readonly IConfigurationAccessor _config;
+
+    public MyService(IConfigurationAccessor config)
+    {
+        _config = config;
+    }
+}
+```
+
+### Get a String Value
+
+Retrieves a configuration value by key. Returns `null` if the key doesn't exist.
+
+```csharp
+string? apiUrl = await _config.GetValueAsync("MyApp", "ApiUrl");
+
+if (apiUrl != null)
+{
+    Console.WriteLine($"API URL: {apiUrl}");
+}
+else
+{
+    Console.WriteLine("ApiUrl configuration not found");
+}
+```
+
+**Method Signature:**
+```csharp
+Task<string?> GetValueAsync(string applicationName, string key);
+```
+
+### Get a String Value with Default
+
+Retrieves a configuration value by key, returning a default value if not found.
+
+```csharp
+// Returns "30" if "Timeout" key doesn't exist
+string timeout = await _config.GetValueAsync("MyApp", "Timeout", "30");
+Console.WriteLine($"Timeout: {timeout} seconds");
+
+// Useful for feature flags with safe defaults
+string featureEnabled = await _config.GetValueAsync("MyApp", "EnableNewUI", "false");
+```
+
+**Method Signature:**
+```csharp
+Task<string> GetValueAsync(string applicationName, string key, string defaultValue);
+```
+
+### Get a Typed Value
+
+Retrieves a configuration value and converts it to the specified type using `IParsable<T>`. Returns `default(T)` if the key doesn't exist or conversion fails.
+
+Supported types include: `int`, `long`, `double`, `decimal`, `bool`, `DateTime`, `DateTimeOffset`, `TimeSpan`, `Guid`, and any type implementing `IParsable<T>`.
+
+```csharp
+// Get an integer value
+int? maxRetries = await _config.GetValueAsync<int>("MyApp", "MaxRetries");
+if (maxRetries.HasValue)
+{
+    Console.WriteLine($"Max retries: {maxRetries.Value}");
+}
+
+// Get a boolean value
+bool? enableLogging = await _config.GetValueAsync<bool>("MyApp", "EnableDetailedLogging");
+if (enableLogging == true)
+{
+    Console.WriteLine("Detailed logging is enabled");
+}
+
+// Get a decimal value
+decimal? taxRate = await _config.GetValueAsync<decimal>("MyApp", "TaxRate");
+
+// Get a TimeSpan value (format: "hh:mm:ss" or "d.hh:mm:ss")
+TimeSpan? sessionTimeout = await _config.GetValueAsync<TimeSpan>("MyApp", "SessionTimeout");
+
+// Get a DateTime value
+DateTime? maintenanceWindow = await _config.GetValueAsync<DateTime>("MyApp", "MaintenanceStartTime");
+
+// Get a Guid value
+Guid? tenantId = await _config.GetValueAsync<Guid>("MyApp", "DefaultTenantId");
+```
+
+**Method Signature:**
+```csharp
+Task<T?> GetValueAsync<T>(string applicationName, string key) where T : IParsable<T>;
+```
+
+> **Note:** If the value cannot be parsed to the specified type, a warning is logged and `default(T)` is returned.
+
+### Get a Typed Value with Default
+
+Retrieves a configuration value and converts it to the specified type, returning a default value if not found or conversion fails.
+
+```csharp
+// Get an integer with default
+int maxConnections = await _config.GetValueAsync("MyApp", "MaxConnections", 100);
+Console.WriteLine($"Max connections: {maxConnections}");
+
+// Get a boolean with default (great for feature flags)
+bool enableCache = await _config.GetValueAsync("MyApp", "EnableCache", true);
+bool useDarkMode = await _config.GetValueAsync("MyApp", "UseDarkMode", false);
+
+// Get a decimal with default
+decimal discountRate = await _config.GetValueAsync("MyApp", "DiscountRate", 0.10m);
+
+// Get a TimeSpan with default
+TimeSpan cacheExpiration = await _config.GetValueAsync("MyApp", "CacheExpiration", TimeSpan.FromMinutes(30));
+
+// Complex example: Building a connection string
+string host = await _config.GetValueAsync("MyApp", "DbHost", "localhost");
+int port = await _config.GetValueAsync("MyApp", "DbPort", 5432);
+string database = await _config.GetValueAsync("MyApp", "DbName", "mydb");
+```
+
+**Method Signature:**
+```csharp
+Task<T> GetValueAsync<T>(string applicationName, string key, T defaultValue) where T : IParsable<T>;
+```
+
+### Get All Configurations
+
+Retrieves all configuration key-value pairs for an application as a read-only dictionary. Useful when you need to access multiple values or iterate over all configurations.
+
+```csharp
+IReadOnlyDictionary<string, string> allConfigs = await _config.GetAllAsync("MyApp");
+
+Console.WriteLine($"Found {allConfigs.Count} configurations:");
+
+foreach (var (key, value) in allConfigs)
+{
+    Console.WriteLine($"  {key}: {value}");
+}
+
+// Check if a specific key exists and get its value
+if (allConfigs.TryGetValue("ApiUrl", out var apiUrl))
+{
+    Console.WriteLine($"API URL: {apiUrl}");
+}
+
+// Filter configurations by prefix
+var featureFlags = allConfigs
+    .Where(kv => kv.Key.StartsWith("FeatureFlag."))
+    .ToDictionary(kv => kv.Key, kv => kv.Value);
+
+Console.WriteLine($"Found {featureFlags.Count} feature flags");
+```
+
+**Method Signature:**
+```csharp
+Task<IReadOnlyDictionary<string, string>> GetAllAsync(string applicationName);
+```
+
+**Returns:** A dictionary of all configuration key-value pairs, or an empty dictionary if none found.
+
+### Refresh Cache
+
+Invalidates the cache for the specified application and reloads fresh data from the API. Use this method after configuration changes to ensure all consumers get updated values.
+
+```csharp
+// After updating configurations via IConfigurationService
+var updateResponse = await _configurationService.UpdateAsync(config);
+
+if (updateResponse.IsSuccessStatusCode)
+{
+    // Refresh the cache so IConfigurationAccessor returns updated values
+    await _config.RefreshAsync("MyApp");
+    
+    Console.WriteLine("Configuration updated and cache refreshed");
+}
+
+// You can also refresh on a schedule or trigger
+public class ConfigurationRefreshBackgroundService : BackgroundService
+{
+    private readonly IConfigurationAccessor _config;
+    private readonly TimeSpan _refreshInterval = TimeSpan.FromHours(1);
+
+    public ConfigurationRefreshBackgroundService(IConfigurationAccessor config)
+    {
+        _config = config;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            await Task.Delay(_refreshInterval, stoppingToken);
+            await _config.RefreshAsync("MyApp");
+        }
+    }
+}
+```
+
+**Method Signature:**
+```csharp
+Task RefreshAsync(string applicationName);
+```
+
+### Check if Key Exists
+
+Checks whether a configuration key exists for the specified application without retrieving its value.
+
+```csharp
+bool hasApiKey = await _config.ContainsKeyAsync("MyApp", "ExternalApiKey");
+
+if (hasApiKey)
+{
+    string? apiKey = await _config.GetValueAsync("MyApp", "ExternalApiKey");
+    // Use the API key...
+}
+else
+{
+    Console.WriteLine("Warning: ExternalApiKey is not configured");
+}
+
+// Useful for conditional feature initialization
+if (await _config.ContainsKeyAsync("MyApp", "RedisConnectionString"))
+{
+    // Initialize Redis connection
+}
+else
+{
+    // Fall back to in-memory cache
+}
+```
+
+**Method Signature:**
+```csharp
+Task<bool> ContainsKeyAsync(string applicationName, string key);
+```
+
+### Complete IConfigurationAccessor Example
+
+Here's a comprehensive example showing `IConfigurationAccessor` in a real-world service:
+
+```csharp
+using Corp.Api.Configuration.Lib.Services.Interfaces;
+
+public class EmailService
+{
+    private readonly IConfigurationAccessor _config;
+    private readonly ILogger<EmailService> _logger;
+    private const string AppName = "EmailService";
+
+    public EmailService(IConfigurationAccessor config, ILogger<EmailService> logger)
+    {
+        _config = config;
+        _logger = logger;
+    }
+
+    public async Task<bool> SendEmailAsync(string to, string subject, string body)
+    {
+        // Get SMTP configuration with defaults
+        string smtpHost = await _config.GetValueAsync(AppName, "SmtpHost", "localhost");
+        int smtpPort = await _config.GetValueAsync(AppName, "SmtpPort", 587);
+        bool useSsl = await _config.GetValueAsync(AppName, "SmtpUseSsl", true);
+        
+        // Get optional credentials
+        string? username = await _config.GetValueAsync(AppName, "SmtpUsername");
+        string? password = await _config.GetValueAsync(AppName, "SmtpPassword");
+        
+        // Get sender information
+        string fromAddress = await _config.GetValueAsync(AppName, "FromAddress", "noreply@example.com");
+        string fromName = await _config.GetValueAsync(AppName, "FromName", "System");
+        
+        // Check for feature flags
+        bool enableEmailLogging = await _config.GetValueAsync(AppName, "EnableEmailLogging", false);
+        
+        // Get rate limiting settings
+        int maxEmailsPerMinute = await _config.GetValueAsync(AppName, "MaxEmailsPerMinute", 60);
+        
+        if (enableEmailLogging)
+        {
+            _logger.LogInformation("Sending email to {To} via {Host}:{Port}", to, smtpHost, smtpPort);
+        }
+
+        // ... send email logic ...
+
+        return true;
+    }
+
+    public async Task ReloadConfigurationAsync()
+    {
+        await _config.RefreshAsync(AppName);
+        _logger.LogInformation("Email service configuration reloaded");
+    }
+}
+```
+
+### When to Use Each Service
+
+| Use Case | Recommended Service |
+|----------|-------------------|
+| **Reading configuration values at runtime** | `IConfigurationAccessor` ✅ |
+| **Feature flags and settings** | `IConfigurationAccessor` ✅ |
+| **Creating/updating/deleting configurations** | `IConfigurationService` |
+| **Admin UI for configuration management** | `IConfigurationService` |
+| **Reading configuration at startup only** | `IConfiguration` (via startup load) |
+| **Application CRUD operations** | `IApplicationService` |
+| **Health checks** | `IHeartbeatService` |
+
+---
+
 ## Entity Models
 
 ### Application
@@ -843,7 +1186,6 @@ catch (HttpRequestException ex)
 using Corp.Api.Configuration.Lib.Extensions;
 using Corp.Api.Configuration.Lib.Services.Interfaces;
 using Corp.Api.Configuration.Obj.Entities;
-using Refit;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -859,10 +1201,26 @@ builder.AddConfigurationApiAndLoadConfigurations("MyApplicationName");
 
 var app = builder.Build();
 
-// Example endpoint using the Configuration API
+// Example: Using IConfigurationAccessor for runtime configuration (RECOMMENDED)
+app.MapGet("/settings", async (IConfigurationAccessor config) =>
+{
+    // Get typed configuration values with defaults
+    string apiUrl = await config.GetValueAsync("MyApp", "ExternalApiUrl", "https://api.example.com");
+    int timeout = await config.GetValueAsync("MyApp", "TimeoutSeconds", 30);
+    bool enableFeature = await config.GetValueAsync("MyApp", "EnableNewFeature", false);
+    
+    return Results.Ok(new
+    {
+        ApiUrl = apiUrl,
+        Timeout = timeout,
+        FeatureEnabled = enableFeature
+    });
+});
+
+// Example: Get all configurations for an application
 app.MapGet("/config/{appName}", async (
     string appName,
-    IConfigurationService configService,
+    IConfigurationAccessor configAccessor,
     IApplicationService appService) =>
 {
     // Verify application exists
@@ -873,15 +1231,45 @@ app.MapGet("/config/{appName}", async (
         return Results.NotFound($"Application '{appName}' not found");
     }
 
-    // Get cached configurations
-    var configs = await configService.GetByApplicationNameAsync(appName);
+    // Get all configurations using IConfigurationAccessor (cached)
+    var configs = await configAccessor.GetAllAsync(appName);
     
     return Results.Ok(new
     {
         Application = appResponse.Content,
         Configurations = configs,
-        Count = configs?.Count ?? 0
+        Count = configs.Count
     });
+});
+
+// Example: Refresh configuration cache (useful after updates)
+app.MapPost("/config/{appName}/refresh", async (
+    string appName,
+    IConfigurationAccessor configAccessor) =>
+{
+    await configAccessor.RefreshAsync(appName);
+    
+    return Results.Ok(new { Message = $"Cache refreshed for {appName}" });
+});
+
+// Example: CRUD operations using IConfigurationService
+app.MapPost("/config", async (
+    Configuration newConfig,
+    IConfigurationService configService,
+    IConfigurationAccessor configAccessor) =>
+{
+    var response = await configService.InsertAsync(newConfig);
+    
+    if (response.IsSuccessStatusCode)
+    {
+        // Refresh the cache so IConfigurationAccessor sees the new value
+        // Note: You'd need to resolve the application name from ApplicationId
+        // await configAccessor.RefreshAsync("MyApp");
+        
+        return Results.Created($"/config/{response.Content}", new { Id = response.Content });
+    }
+    
+    return Results.Problem($"Failed to create configuration: {response.StatusCode}");
 });
 
 // Health check endpoint
@@ -995,6 +1383,7 @@ await _configurationService.ResetCachedConfigurationAsync("MyApp");
 
 | Version | Changes |
 |---------|---------|
+| 10.0.4 | Added `IConfigurationAccessor` for cached runtime configuration access with typed value support. This is now the recommended way to access configuration values throughout the application lifecycle. |
 | 10.0.3 | Updated all service methods to return `ApiResponse<T>` for access to HTTP response metadata. Migrated from `IDistributedCache` to `HybridCache` for improved caching with stampede protection. Cache duration increased to 90 days. |
 | 10.0.0-beta-2 | Initial version targeting .NET 10 |
 
@@ -1006,5 +1395,6 @@ Copyright © Sedgwick Consumer Claims. All rights reserved.
 
 ## See Also
 
-- [Corp.Api.Configuration.Lib.DbDirect](../Corp.Api.Configuration.Lib.DbDirect/README.md) - For direct database access
 - [Corp.Api.Configuration.Obj](../Corp.Api.Configuration.Obj/README.md) - Entity models and DTOs
+- [Microsoft HybridCache Documentation](https://learn.microsoft.com/en-us/aspnet/core/performance/caching/hybrid) - Learn more about HybridCache
+- [Refit Documentation](https://github.com/reactiveui/refit) - Type-safe REST library for .NET
