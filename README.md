@@ -146,16 +146,10 @@ Console.WriteLine($"Encrypted password: {encryptedPassword}");
 
 You can also use environment variables instead of appsettings.json. Note that the `TargetedVoyagerInstance`, `TargetedVoyagerEnvironment`, and `ApplicationName` values must still be in appsettings.json:
 
-```bash
-# Windows (replace MyApplicationName with your actual ApplicationName value)
+```cmd
 set MyInstance.Development.MyApplicationName.Url=https://config-api.example.com
 set MyInstance.Development.MyApplicationName.CertificatePath=C:\Certificates\client.pfx
 set MyInstance.Development.MyApplicationName.Password=AES-encrypted-password
-
-# Linux/macOS (use double underscores)
-export MyInstance__Development__MyApplicationName__Url=https://config-api.example.com
-export MyInstance__Development__MyApplicationName__CertificatePath=/certificates/client.pfx
-export MyInstance__Development__MyApplicationName__Password=AES-encrypted-password
 ```
 
 ## Service Registration
