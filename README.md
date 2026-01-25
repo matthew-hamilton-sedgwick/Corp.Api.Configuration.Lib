@@ -1310,15 +1310,16 @@ app.Run();
 }
 ```
 
-**Error:** `ConfigurationErrorsException: {Instance}.{Environment}.ConfigurationApiUrl environment variable does not exist`
+**Error:** `ConfigurationErrorsException: {Instance}.{Environment}.{ApplicationName}.Url environment variable does not exist`
 
-**Solution:** Ensure the composite configuration key exists:
+**Solution:** Ensure all required configuration keys exist in your `appsettings.json`:
 
 ```json
 {
   "TargetedVoyagerInstance": "MyInstance",
   "TargetedVoyagerEnvironment": "Development",
-  "MyInstance.Development.ConfigurationApiUrl": "https://config-api.example.com"
+  "ApplicationName": "MyApplicationName",
+  "MyInstance.Development.MyApplicationName.Url": "https://config-api.example.com"
 }
 ```
 
