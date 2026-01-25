@@ -111,10 +111,11 @@ Add the following configuration to your `appsettings.json`:
 {
   "TargetedVoyagerInstance": "MyInstance",
   "TargetedVoyagerEnvironment": "Development",
+  "ApplicationName": "MyApplicationName",
   
-  "MyInstance.Development.ConfigurationApiUrl": "https://config-api.example.com",
-  "MyInstance.Development.ConfigurationApiCertificatePath": "C:\\Certificates\\client.pfx",
-  "MyInstance.Development.ConfigurationApiPassword": "AES-encrypted-password-here"
+  "MyInstance.Development.MyApplicationName.Url": "https://config-api.example.com",
+  "MyInstance.Development.MyApplicationName.CertificatePath": "C:\\Certificates\\client.pfx",
+  "MyInstance.Development.MyApplicationName.Password": "AES-encrypted-password-here"
 }
 ```
 
@@ -124,9 +125,10 @@ Add the following configuration to your `appsettings.json`:
 |-----|-------------|----------|
 | `TargetedVoyagerInstance` | The instance identifier (e.g., client name, deployment name) | Yes |
 | `TargetedVoyagerEnvironment` | The environment (Development, Staging, Production) | Yes |
-| `{Instance}.{Environment}.ConfigurationApiUrl` | The base URL of the Configuration API | Yes |
-| `{Instance}.{Environment}.ConfigurationApiCertificatePath` | Full path to the client certificate (.pfx file) | Yes |
-| `{Instance}.{Environment}.ConfigurationApiPassword` | AES-encrypted password for the certificate | Yes |
+| `ApplicationName` | The name of the application (used to fetch configurations from the API) | Yes |
+| `{Instance}.{Environment}.{ApplicationName}.Url` | The base URL of the Configuration API | Yes |
+| `{Instance}.{Environment}.{ApplicationName}.CertificatePath` | Full path to the client certificate (.pfx file) | Yes |
+| `{Instance}.{Environment}.{ApplicationName}.Password` | AES-encrypted password for the certificate | Yes |
 
 ### Encrypting the Certificate Password
 
@@ -142,18 +144,18 @@ Console.WriteLine($"Encrypted password: {encryptedPassword}");
 
 ### Environment Variables (Alternative)
 
-You can also use environment variables instead of appsettings.json. Note that the `TargetedVoyagerInstance` and `TargetedVoyagerEnvironment` values must still be in appsettings.json:
+You can also use environment variables instead of appsettings.json. Note that the `TargetedVoyagerInstance`, `TargetedVoyagerEnvironment`, and `ApplicationName` values must still be in appsettings.json:
 
 ```bash
-# Windows
-set MyInstance.Development.ConfigurationApiUrl=https://config-api.example.com
-set MyInstance.Development.ConfigurationApiCertificatePath=C:\Certificates\client.pfx
-set MyInstance.Development.ConfigurationApiPassword=AES-encrypted-password
+# Windows (replace MyApplicationName with your actual ApplicationName value)
+set MyInstance.Development.MyApplicationName.Url=https://config-api.example.com
+set MyInstance.Development.MyApplicationName.CertificatePath=C:\Certificates\client.pfx
+set MyInstance.Development.MyApplicationName.Password=AES-encrypted-password
 
 # Linux/macOS (use double underscores)
-export MyInstance__Development__ConfigurationApiUrl=https://config-api.example.com
-export MyInstance__Development__ConfigurationApiCertificatePath=/certificates/client.pfx
-export MyInstance__Development__ConfigurationApiPassword=AES-encrypted-password
+export MyInstance__Development__MyApplicationName__Url=https://config-api.example.com
+export MyInstance__Development__MyApplicationName__CertificatePath=/certificates/client.pfx
+export MyInstance__Development__MyApplicationName__Password=AES-encrypted-password
 ```
 
 ## Service Registration
@@ -166,13 +168,14 @@ using Corp.Api.Configuration.Lib.Extensions;
 var builder = WebApplication.CreateBuilder(args);
 
 // Add Configuration API services
-builder.AddConfigurationApiAndLoadConfigurations("MyApplicationName");
+builder.AddConfigurationApiAndLoadConfigurations();
 
 var app = builder.Build();
 ```
 
 The `AddConfigurationApiAndLoadConfigurations()` extension method:
-- Reads configuration from appsettings.json
+- Reads `TargetedVoyagerInstance`, `TargetedVoyagerEnvironment`, and `ApplicationName` from appsettings.json
+- Constructs configuration keys using the pattern `{Instance}.{Environment}.{ApplicationName}.*`
 - Registers Refit HTTP clients with certificate-based authentication
 - Configures `HybridCache` with an in-memory distributed cache (L1 + L2 caching)
 - Loads configuration key-value pairs from the API into the application's `IConfiguration`
@@ -1080,7 +1083,7 @@ builder.Services.AddStackExchangeRedisCache(options =>
 });
 
 // HybridCache will use Redis as L2, with in-memory as L1
-builder.AddConfigurationApiAndLoadConfigurations("MyApplicationName");
+builder.AddConfigurationApiAndLoadConfigurations();
 
 var app = builder.Build();
 ```
@@ -1105,7 +1108,7 @@ builder.Services.AddDistributedSqlServerCache(options =>
 });
 
 // HybridCache will use SQL Server as L2, with in-memory as L1
-builder.AddConfigurationApiAndLoadConfigurations("MyApplicationName");
+builder.AddConfigurationApiAndLoadConfigurations();
 
 var app = builder.Build();
 ```
@@ -1197,7 +1200,7 @@ var builder = WebApplication.CreateBuilder(args);
 // });
 
 // Register Configuration API services and load configurations
-builder.AddConfigurationApiAndLoadConfigurations("MyApplicationName");
+builder.AddConfigurationApiAndLoadConfigurations();
 
 var app = builder.Build();
 
