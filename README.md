@@ -97,7 +97,7 @@ Install-Package Corp.Api.Configuration.Lib
 - AES-encrypted certificate password using `Corp.Lib.Cryptography.Aes`
 - Required NuGet packages (installed automatically):
   - `Corp.Lib.Cryptography` (v10.0.1)
-  - `Corp.Lib.DistributedCache` (v10.0.10)
+  - `Corp.Lib.DistributedCache` (v10.0.11)
   - `Corp.Lib.Refit` (v10.0.8)
   - `Microsoft.Extensions.Caching.Hybrid` (v10.2.0)
 
