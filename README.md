@@ -112,6 +112,7 @@ Add the following configuration to your `appsettings.json`:
   "TargetedVoyagerInstance": "MyInstance",
   "TargetedVoyagerEnvironment": "Development",
   "ApplicationName": "MyApplicationName",
+  "CacheExpirationInDays": 14,
   
   "MyInstance.Development.MyApplicationName.Url": "https://config-api.example.com",
   "MyInstance.Development.MyApplicationName.CertificatePath": "C:\\Certificates\\client.pfx",
@@ -129,6 +130,7 @@ Add the following configuration to your `appsettings.json`:
 | `{Instance}.{Environment}.{ApplicationName}.Url` | The base URL of the Configuration API | Yes |
 | `{Instance}.{Environment}.{ApplicationName}.CertificatePath` | Full path to the client certificate (.pfx file) | Yes |
 | `{Instance}.{Environment}.{ApplicationName}.Password` | AES-encrypted password for the certificate | Yes |
+| `CacheExpirationInDays` | Number of days to cache configuration data (default: 14) | No |
 
 ### Encrypting the Certificate Password
 
@@ -337,7 +339,7 @@ else
 
 ### Get Configurations by Application Name (Cached)
 
-Retrieves all configuration settings for a specific application. Results are **cached for 90 days** using `HybridCache` (L1 in-memory + L2 distributed).
+Retrieves all configuration settings for a specific application. Results are **cached using `HybridCache`** (L1 in-memory + L2 distributed). The cache duration is configurable via the `CacheExpirationInDays` setting (default: 14 days).
 
 > **Note:** This method returns `List<Configuration>?` directly (not wrapped in `ApiResponse`) because the cached content is returned, not the HTTP response metadata.
 
@@ -345,7 +347,7 @@ Retrieves all configuration settings for a specific application. Results are **c
 // First call: fetches from API and caches the result
 List<Configuration>? configs = await _configurationService.GetByApplicationNameAsync("MyApp");
 
-// Subsequent calls within 90 days: returns cached data (no API call)
+// Subsequent calls within the cache duration: returns cached data (no API call)
 List<Configuration>? cachedConfigs = await _configurationService.GetByApplicationNameAsync("MyApp");
 
 if (configs != null)
@@ -377,6 +379,9 @@ Console.WriteLine($"Reloaded {freshConfigs?.Count ?? 0} configurations");
 ```
 
 **Returns:** `List<Configuration>?` (fresh cached content)
+
+**Cache Duration:** Configurable via `CacheExpirationInDays` in app configuration (default: 14 days)
+```
 
 ### Insert Configuration
 
@@ -1043,8 +1048,8 @@ By default, the library configures an in-memory distributed cache as L2, which i
 |--------|--------|----------------|--------|
 | `GetAllAsync()` | No | - | `ApiResponse<List<Configuration>?>` |
 | `GetByIdAsync(int)` | No | - | `ApiResponse<Configuration?>` |
-| `GetByApplicationNameAsync(string)` | **Yes** | 90 days | `List<Configuration>?` |
-| `ResetCachedConfigurationAsync(string)` | Invalidates & reloads | 90 days | `List<Configuration>?` |
+| `GetByApplicationNameAsync(string)` | **Yes** | Configurable (default: 14 days) | `List<Configuration>?` |
+| `ResetCachedConfigurationAsync(string)` | Invalidates & reloads | Configurable (default: 14 days) | `List<Configuration>?` |
 | `InsertAsync()` | No | - | `ApiResponse<int>` |
 | `UpdateAsync()` | No | - | `ApiResponse<int>` |
 | `DeleteAsync(int)` | No | - | `ApiResponse<int>` |
@@ -1381,8 +1386,9 @@ await _configurationService.ResetCachedConfigurationAsync("MyApp");
 
 | Version | Changes |
 |---------|---------|
+| 10.0.5 | Made cache expiration configurable via `CacheExpirationInDays` setting (default: 14 days). |
 | 10.0.4 | Added `IConfigurationAccessor` for cached runtime configuration access with typed value support. This is now the recommended way to access configuration values throughout the application lifecycle. |
-| 10.0.3 | Updated all service methods to return `ApiResponse<T>` for access to HTTP response metadata. Migrated from `IDistributedCache` to `HybridCache` for improved caching with stampede protection. Cache duration increased to 90 days. |
+| 10.0.3 | Updated all service methods to return `ApiResponse<T>` for access to HTTP response metadata. Migrated from `IDistributedCache` to `HybridCache` for improved caching with stampede protection. |
 | 10.0.0-beta-2 | Initial version targeting .NET 10 |
 
 ---
