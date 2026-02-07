@@ -36,7 +36,6 @@ HTTP/Refit client library for accessing the Configuration API. This NuGet packag
   - [Delete Application](#delete-application)
 - [IHeartbeatService](#iheartbeatservice)
   - [Get Heartbeat](#get-heartbeat)
-  - [Get Repository Connection String Name](#get-repository-connection-string-name)
 - [IConfigurationAccessor (Recommended)](#iconfigurationaccessor-recommended)
   - [Why Use IConfigurationAccessor](#why-use-iconfigurationaccessor)
   - [Get a String Value](#get-a-string-value)
@@ -98,8 +97,9 @@ Install-Package Corp.Api.Configuration.Lib
 - AES-encrypted certificate password using `Corp.Lib.Cryptography.Aes`
 - Required NuGet packages (installed automatically):
   - `Corp.Lib.Cryptography` (v10.0.1)
-  - `Corp.Lib.Refit` (v10.0.2)
-  - `Microsoft.Extensions.Caching.Hybrid` (v9.4.0)
+  - `Corp.Lib.DistributedCache` (v10.0.10)
+  - `Corp.Lib.Refit` (v10.0.8)
+  - `Microsoft.Extensions.Caching.Hybrid` (v10.2.0)
 
 ## Configuration
 
@@ -112,11 +112,11 @@ Add the following configuration to your `appsettings.json`:
   "TargetedVoyagerInstance": "MyInstance",
   "TargetedVoyagerEnvironment": "Development",
   "ApplicationName": "MyApplicationName",
-  "CacheExpirationInDays": 14,
+  "CacheExpirationInDays": 1,
   
-  "MyInstance.Development.MyApplicationName.Url": "https://config-api.example.com",
-  "MyInstance.Development.MyApplicationName.CertificatePath": "C:\\Certificates\\client.pfx",
-  "MyInstance.Development.MyApplicationName.Password": "AES-encrypted-password-here"
+  "MyInstance.Development.Corp.Api.Configuration.Url": "https://config-api.example.com",
+  "MyInstance.Development.Corp.Api.Configuration.CertificatePath": "C:\\Certificates\\client.pfx",
+  "MyInstance.Development.Corp.Api.Configuration.Password": "AES-encrypted-password-here"
 }
 ```
 
@@ -127,10 +127,10 @@ Add the following configuration to your `appsettings.json`:
 | `TargetedVoyagerInstance` | The instance identifier (e.g., client name, deployment name) | Yes |
 | `TargetedVoyagerEnvironment` | The environment (Development, Staging, Production) | Yes |
 | `ApplicationName` | The name of the application (used to fetch configurations from the API) | Yes |
-| `{Instance}.{Environment}.{ApplicationName}.Url` | The base URL of the Configuration API | Yes |
-| `{Instance}.{Environment}.{ApplicationName}.CertificatePath` | Full path to the client certificate (.pfx file) | Yes |
-| `{Instance}.{Environment}.{ApplicationName}.Password` | AES-encrypted password for the certificate | Yes |
-| `CacheExpirationInDays` | Number of days to cache configuration data (default: 14) | No |
+| `{Instance}.{Environment}.Corp.Api.Configuration.Url` | The base URL of the Configuration API | Yes |
+| `{Instance}.{Environment}.Corp.Api.Configuration.CertificatePath` | Full path to the client certificate (.pfx file) | Yes |
+| `{Instance}.{Environment}.Corp.Api.Configuration.Password` | AES-encrypted password for the certificate | Yes |
+| `CacheExpirationInDays` | Number of days to cache configuration data (default: 1) | No |
 
 ### Encrypting the Certificate Password
 
@@ -149,9 +149,9 @@ Console.WriteLine($"Encrypted password: {encryptedPassword}");
 You can also use environment variables instead of appsettings.json. Note that the `TargetedVoyagerInstance`, `TargetedVoyagerEnvironment`, and `ApplicationName` values must still be in appsettings.json:
 
 ```cmd
-set MyInstance.Development.MyApplicationName.Url=https://config-api.example.com
-set MyInstance.Development.MyApplicationName.CertificatePath=C:\Certificates\client.pfx
-set MyInstance.Development.MyApplicationName.Password=AES-encrypted-password
+set MyInstance.Development.Corp.Api.Configuration.Url=https://config-api.example.com
+set MyInstance.Development.Corp.Api.Configuration.CertificatePath=C:\Certificates\client.pfx
+set MyInstance.Development.Corp.Api.Configuration.Password=AES-encrypted-password
 ```
 
 ## Service Registration
@@ -380,7 +380,7 @@ Console.WriteLine($"Reloaded {freshConfigs?.Count ?? 0} configurations");
 
 **Returns:** `List<Configuration>?` (fresh cached content)
 
-**Cache Duration:** Configurable via `CacheExpirationInDays` in app configuration (default: 14 days)
+**Cache Duration:** Configurable via `CacheExpirationInDays` in app configuration (default: 1 day)
 ```
 
 ### Insert Configuration
@@ -648,17 +648,6 @@ else
 
 **Returns:** `ApiResponse<DateTime>`
 
-### Get Repository Connection String Name
-
-Returns the connection string name used by the API's repository layer. Useful for diagnostics.
-
-```csharp
-string connectionStringName = await _heartbeatService.GetMyRepositoryConnectionStringNameAsync();
-Console.WriteLine($"API is using connection string: {connectionStringName}");
-```
-
-**API Endpoint:** `GET /Heartbeat/GetMyRepositoryConnectionStringName`
-
 ---
 
 ## IConfigurationAccessor (Recommended)
@@ -680,7 +669,6 @@ When you call `AddConfigurationApiAndLoadConfigurations()`, configurations are l
 | Runtime updates | ❌ Requires restart | ✅ Call `RefreshAsync()` |
 | Stampede protection | ❌ Only startup | ✅ Throughout lifecycle |
 | Type conversion | Manual parsing | Built-in with `IParsable<T>` |
-| Async/await | ❌ Synchronous only | ✅ Fully async |
 
 ### Dependency Injection
 
@@ -1048,8 +1036,8 @@ By default, the library configures an in-memory distributed cache as L2, which i
 |--------|--------|----------------|--------|
 | `GetAllAsync()` | No | - | `ApiResponse<List<Configuration>?>` |
 | `GetByIdAsync(int)` | No | - | `ApiResponse<Configuration?>` |
-| `GetByApplicationNameAsync(string)` | **Yes** | Configurable (default: 14 days) | `List<Configuration>?` |
-| `ResetCachedConfigurationAsync(string)` | Invalidates & reloads | Configurable (default: 14 days) | `List<Configuration>?` |
+| `GetByApplicationNameAsync(string)` | **Yes** | Configurable (default: 1 day) | `List<Configuration>?` |
+| `ResetCachedConfigurationAsync(string)` | Invalidates & reloads | Configurable (default: 1 day) | `List<Configuration>?` |
 | `InsertAsync()` | No | - | `ApiResponse<int>` |
 | `UpdateAsync()` | No | - | `ApiResponse<int>` |
 | `DeleteAsync(int)` | No | - | `ApiResponse<int>` |
@@ -1309,7 +1297,7 @@ app.Run();
 }
 ```
 
-**Error:** `ConfigurationErrorsException: {Instance}.{Environment}.{ApplicationName}.Url environment variable does not exist`
+**Error:** `ConfigurationErrorsException: {Instance}.{Environment}.Corp.Api.Configuration.Url environment variable does not exist`
 
 **Solution:** Ensure all required configuration keys exist in your `appsettings.json`:
 
@@ -1318,7 +1306,7 @@ app.Run();
   "TargetedVoyagerInstance": "MyInstance",
   "TargetedVoyagerEnvironment": "Development",
   "ApplicationName": "MyApplicationName",
-  "MyInstance.Development.MyApplicationName.Url": "https://config-api.example.com"
+  "MyInstance.Development.Corp.Api.Configuration.Url": "https://config-api.example.com"
 }
 ```
 
@@ -1378,7 +1366,6 @@ await _configurationService.ResetCachedConfigurationAsync("MyApp");
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/Heartbeat/Get` | Get server timestamp |
-| GET | `/Heartbeat/GetMyRepositoryConnectionStringName` | Get connection string name |
 
 ---
 
@@ -1386,7 +1373,8 @@ await _configurationService.ResetCachedConfigurationAsync("MyApp");
 
 | Version | Changes |
 |---------|---------|
-| 10.0.5 | Made cache expiration configurable via `CacheExpirationInDays` setting (default: 14 days). |
+| 10.0.28 | Code quality improvements: fixed inconsistent `ConfigureAwait` usage, updated cache expiration default to 1 day, `ConfigurationAccessor` now reads `CacheExpirationInDays` from configuration for consistency with `ConfigurationService`. |
+| 10.0.5 | Made cache expiration configurable via `CacheExpirationInDays` setting. |
 | 10.0.4 | Added `IConfigurationAccessor` for cached runtime configuration access with typed value support. This is now the recommended way to access configuration values throughout the application lifecycle. |
 | 10.0.3 | Updated all service methods to return `ApiResponse<T>` for access to HTTP response metadata. Migrated from `IDistributedCache` to `HybridCache` for improved caching with stampede protection. |
 | 10.0.0-beta-2 | Initial version targeting .NET 10 |
